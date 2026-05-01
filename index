@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Teleprompter Pro Offline</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0;
+            width: 100%; height: 100%;
+            background-color: #000; color: white;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        /* Aviso de Protocolo Seguro */
+        #protocol-warning {
+            display: none;
+            background: #e74c3c; color: white;
+            padding: 15px; text-align: center;
+            font-size: 14px; position: fixed; top: 0; z-index: 1000; width: 100%;
+        }
+
+        /* Container da Câmera */
+        #video-container {
+            position: fixed; top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 1; background: #000;
+        }
+
+        video {
+            width: 100%; height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Espelha a câmera para o usuário */
+        }
+
+        /* Camada do Texto */
+        #prompter-overlay {
+            position: absolute; top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 2; background: rgba(0, 0, 0, 0.4);
+            display: flex; flex-direction: column; align-items: center;
+            pointer-events: none; /* Deixa tocar nos botões atrás se precisar */
+        }
+
+        #text-container {
+            width: 90%;
+            margin-top: 50vh;
+            text-align: center;
+            transition: transform 0.1s linear;
+        }
+
+        /* Guia de Leitura */
+        #guide {
+            position: fixed; top: 50%;
+            width: 100%; height: 50px;
+            border-top: 2px solid rgba(255, 255, 0, 0.6);
+            border-bottom: 2px solid rgba(255, 255, 0, 0.6);
+            background: rgba(255, 255, 0, 0.1);
+            pointer-events: none; z-index: 3;
+            transform: translateY(-50%);
+        }
+
+        /* Interface de Configuração */
+        #setup-screen {
+            position: fixed; top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #1a1a1a; z-index: 100;
+            padding: 20px; box-sizing: border-box;
+            display: flex; flex-direction: column;
+            overflow-y: auto;
+        }
+
+        h2 { margin-top: 0; color: #2ecc71; }
+
+        textarea {
+            width: 100%; flex-grow: 1; min-height: 200px;
+            background: #222; color: #fff;
+            border: 1px solid #444; border-radius: 8px;
+            padding: 15px; font-size: 16px; margin-bottom: 15px;
+            box-sizing: border-box;
+        }
+
+        .config-row {
+            display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px;
+        }
+
+        label { font-size: 14px; color: #bbb; }
+
+        button {
+            padding: 18px; font-size: 18px; font-weight: bold;
+            border: none; border-radius: 10px; cursor: pointer;
+            transition: 0.2s;
+        }
+
+        #btn-start { background: #2ecc71; color: white; width: 100%; }
+        
+        #btn-stop { 
+            position: fixed; bottom: 30px; right: 30px;
+            background: #e74c3c; color: white;
+            z-index: 101; display: none;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        /* Espelhamento de texto (opcional) */
+        .mirrored { transform: scaleX(-1); }
+
+    </style>
+</head>
+<body>
+
+    <div id="protocol-warning">
+        ⚠️ A câmera pode não funcionar abrindo o arquivo direto. <br>
+        Use HTTPS ou um servidor local (ex: GitHub Pages).
+    </div>
+
+    <!-- Tela de Configuração -->
+    <div id="setup-screen">
+        <h2>Teleprompter Offline</h2>
+        <textarea id="script-input" placeholder="Cole seu roteiro aqui...">Bem-vindo ao seu Teleprompter!
+Ajuste a velocidade e o tamanho da fonte abaixo.
+O vídeo será salvo no seu celular ao terminar.
+Prepare-se para gravar!</textarea>
+        
+        <div class="config-row">
+            <label id="label-speed">Velocidade de Rolagem: 3</label>
+            <input type="range" id="speed-input" min="1" max="15" value="3">
+        </div>
+
+        <div class="config-row">
+            <label id="label-font">Tamanho da Fonte: 30px</label>
+            <input type="range" id="font-input" min="16" max="70" value="30">
+        </div>
+
+        <button id="btn-start">INICIAR GRAVAÇÃO</button>
+        <p style="text-align: center; font-size: 12px; color: #666; margin-top: 10px;">
+            v1.2 - Privacidade total: nada sai do seu aparelho.
+        </p>
+    </div>
+
+    <!-- Tela de Exibição -->
+    <div id="video-container">
+        <video id="preview" autoplay muted playsinline></video>
+    </div>
+
+    <div id="prompter-overlay">
+        <div id="guide"></div>
+        <div id="text-container">
+            <div id="text-display"></div>
+        </div>
+    </div>
+
+    <button id="btn-stop">PARAR E SALVAR</button>
+
+    <script>
+        // Elementos
+        const setupScreen = document.getElementById('setup-screen');
+        const scriptInput = document.getElementById('script-input');
+        const speedInput = document.getElementById('speed-input');
+        const fontInput = document.getElementById('font-input');
+        const btnStart = document.getElementById('btn-start');
+        const btnStop = document.getElementById('btn-stop');
+        const textDisplay = document.getElementById('text-display');
+        const textContainer = document.getElementById('text-container');
+        const preview = document.getElementById('preview');
+        const warning = document.getElementById('protocol-warning');
+
+        // Mostrar aviso se não for HTTPS
+        if (location.protocol === 'file:') {
+            warning.style.display = 'block';
+        }
+
+        // Atualizar labels em tempo real
+        speedInput.oninput = () => document.getElementById('label-speed').innerText = `Velocidade de Rolagem: ${speedInput.value}`;
+        fontInput.oninput = () => document.getElementById('label-font').innerText = `Tamanho da Fonte: ${fontInput.value}px`;
+
+        let scrollInterval;
+        let mediaRecorder;
+        let recordedChunks = [];
+        let scrollPos = 0;
+
+        btnStart.onclick = async () => {
+            const text = scriptInput.value || "Adicione um texto...";
+            textDisplay.innerText = text;
+            textDisplay.style.fontSize = fontInput.value + 'px';
+            
+            try {
+                // Configurações da Câmera
+                const constraints = { 
+                    video: { 
+                        facingMode: "user",
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }, 
+                    audio: true 
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                preview.srcObject = stream;
+                
+                // Esconder setup e mostrar botão parar
+                setupScreen.style.display = 'none';
+                btnStop.style.display = 'block';
+
+                // Iniciar Gravador
+                const options = { mimeType: 'video/webm;codecs=vp8,opus' };
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                    delete options.mimeType; // Deixa o navegador escolher o melhor formato
+                }
+
+                mediaRecorder = new MediaRecorder(stream, options);
+                recordedChunks = [];
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) recordedChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = saveVideo;
+                
+                mediaRecorder.start();
+                
+                // Delay para começar a subir o texto
+                setTimeout(startScrolling, 2000);
+
+            } catch (err) {
+                console.error(err);
+                alert("ERRO DE PERMISSÃO:\n\nNavegadores bloqueiam a câmera se o arquivo for aberto direto da pasta (file://).\n\nSOLUÇÃO: Suba o arquivo para um site com HTTPS (ex: GitHub Pages) ou use um App de 'Web Server' local.");
+            }
+        };
+
+        function startScrolling() {
+            const speed = parseFloat(speedInput.value);
+            scrollPos = 0;
+            
+            scrollInterval = setInterval(() => {
+                scrollPos += speed * 0.4; 
+                textContainer.style.transform = `translateY(-${scrollPos}px)`;
+            }, 30);
+        }
+
+        btnStop.onclick = () => {
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+            }
+            clearInterval(scrollInterval);
+            
+            // Para a câmera
+            if (preview.srcObject) {
+                preview.srcObject.getTracks().forEach(track => track.stop());
+            }
+            
+            alert("Processando vídeo... aguarde o download.");
+            
+            setTimeout(() => {
+                location.reload(); 
+            }, 2000);
+        };
+
+        function saveVideo() {
+            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = `teleprompter_${new Date().getTime()}.webm`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
